@@ -28,6 +28,7 @@ terraform/*.tfstate.backup
 terraform/*.tfstate.*.backup
 terraform/.terraform.tfstate.lock.info
 terraform/*.tfplan
+terraform/tfplan
 terraform/**/.terraform/
 terraform/**/.build/
 terraform/modules/lambda/.build/
