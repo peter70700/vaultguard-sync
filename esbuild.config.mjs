@@ -1,7 +1,16 @@
 import esbuild from "esbuild";
 import process from "process";
 import { existsSync, mkdirSync } from "fs";
-import { builtinModules } from "module";
+import { builtinModules, createRequire } from "module";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+// Resolve runtime deps wherever they actually live. In a flat install that's
+// <root>/node_modules; in the public monorepo's npm workspaces it's hoisted to
+// the workspace root. Hardcoding <root>/node_modules/<dep> broke the monorepo
+// release build (jszip is hoisted above packages/plugin) — require.resolve walks
+// the node_modules chain and finds it in either layout.
+const requireFromConfig = createRequire(import.meta.url);
 
 // Node built-ins are available in Electron's CJS runtime — keep them external so
 // esbuild doesn't try to bundle/polyfill them. The Tier-2 AI-chat streaming path
@@ -25,6 +34,27 @@ const prod = process.argv[2] === "production";
 // (same as watch), so the dev-only diagnostic commands stay in this output —
 // used by `install:plugin:dev` to put a diagnostics-enabled build in the vault.
 const devBuild = process.argv[2] === "dev";
+const rootDir = dirname(fileURLToPath(import.meta.url));
+
+const safeDependencyAliases = {
+  immediate: join(rootDir, "src", "shims", "immediate.cjs"),
+  // require.resolve("jszip") → its package "main" (lib/index.js), resolved from
+  // wherever jszip is installed (flat OR workspace-hoisted), so the monorepo
+  // release build doesn't look under packages/plugin/node_modules.
+  jszip: requireFromConfig.resolve("jszip"),
+  setimmediate: join(rootDir, "src", "shims", "setimmediate.cjs"),
+};
+
+const safeDependencyAliasPlugin = {
+  name: "vaultguard-safe-dependency-aliases",
+  setup(build) {
+    for (const [moduleName, replacement] of Object.entries(safeDependencyAliases)) {
+      build.onResolve({ filter: new RegExp(`^${moduleName}(?:/.*)?$`) }, () => ({
+        path: replacement,
+      }));
+    }
+  },
+};
 
 // Ensure output directory exists
 if (!existsSync("./dist")) {
@@ -60,6 +90,7 @@ const context = await esbuild.context({
     ".md": "text",
   },
   logLevel: "info",
+  plugins: [safeDependencyAliasPlugin],
   sourcemap: prod ? false : "inline",
   treeShaking: true,
   outfile: "main.js",
